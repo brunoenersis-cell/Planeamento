@@ -22,31 +22,26 @@ require_access()
 st.title("Cronograma SafetyCulture")
 st.caption("Versão 0.6 — cronograma por cliente, com origem auditável de cada tarefa.")
 
-with st.sidebar:
-    st.header("Ligação")
-    
-    # Procura o token nos Secrets do Streamlit Cloud
-    try:
-        token = st.secrets["SAFETYCULTURE_API_TOKEN"]
-    except Exception:
-        token = ""
+# Procura o token e o URL base nos Secrets do Streamlit Cloud
+token = st.secrets.get("SAFETYCULTURE_API_TOKEN", "")
+base_url = st.secrets.get("SAFETYCULTURE_BASE_URL", "https://api.safetyculture.io")
 
-    # Se não encontrar o token nos Secrets, mostra o campo para introdução manual
-    if not token:
+# Se o token NÃO estiver definido nos Secrets, mostra o painel na barra lateral para introdução manual
+if not token:
+    with st.sidebar:
+        st.header("Ligação")
         token = st.text_input(
             "API Token", 
             type="password", 
             help="Defina o token nos Secrets do Streamlit Cloud."
         )
-
-    base_url = st.text_input("URL base", value="https://api.safetyculture.io")
-    
-    if st.button("Testar conexão", use_container_width=True):
-        try:
-            result = SafetyCultureClient(get_settings(token, base_url)).test_safetyculture_connection()
-            (st.success if result.ok else st.error)(result.message)
-        except SafetyCultureError as exc:
-            st.error(str(exc))
+        base_url = st.text_input("URL base", value=base_url)
+        if st.button("Testar conexão", use_container_width=True):
+            try:
+                result = SafetyCultureClient(get_settings(token, base_url)).test_safetyculture_connection()
+                (st.success if result.ok else st.error)(result.message)
+            except SafetyCultureError as exc:
+                st.error(str(exc))
 
 st.subheader("Período")
 today = date.today()
