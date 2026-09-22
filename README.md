@@ -1,2 +1,0 @@
-# Planeamento
-Planeamento SC
