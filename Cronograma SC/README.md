@@ -8,6 +8,8 @@ Aplicação local para consultar as ocorrências de schedules do SafetyCulture e
 2. Copie `.env.example` para `.env` e defina `SAFETYCULTURE_API_TOKEN`, ou introduza o token apenas na sessão da aplicação.
 3. Inicie: `streamlit run app.py`.
 
+No Windows, também pode fazer duplo clique em `Iniciar-Cronograma.cmd`. O lançador inicia a aplicação local em segundo plano e abre `http://localhost:8514`; não é necessário manter o Codex aberto.
+
 O token nunca é guardado pelo programa, exportado ou escrito nos logs. A aplicação consulta o endpoint oficial `GET /scheduling/v1/feed/schedule_occurrences`. O filtro de datas aplica-se a `due_time` e a API pode limitar o histórico disponível; veja a documentação oficial do SafetyCulture para a retenção aplicável à sua organização.
 
 ## Campos e mapeamento

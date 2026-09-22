@@ -19,7 +19,8 @@ def create_excel(frame: pd.DataFrame) -> bytes:
         frame.to_excel(writer, index=False, sheet_name="Cronograma")
         frame.to_excel(writer, index=False, sheet_name="Dados")
         status = frame["Estado"].fillna("").astype(str).str.upper() if "Estado" in frame else pd.Series(dtype=str)
-        summary = pd.DataFrame({"Indicador": ["Total de atividades", "Concluídas", "Pendentes", "Futuras"], "Valor": [len(frame), int(status.isin(["COMPLETE", "LATE_COMPLETE", "COMPLETED"]).sum()), int(status.isin(["TODO", "MISSED", "PENDING"]).sum()), int((pd.to_datetime(frame.get("Data"), errors="coerce", utc=True) > pd.Timestamp.now(tz="UTC")).sum())]})
+        operational_dates = pd.to_datetime(frame.get("Data/hora de início"), errors="coerce", utc=True)
+        summary = pd.DataFrame({"Indicador": ["Total de atividades", "Concluídas", "Pendentes", "Futuras"], "Valor": [len(frame), int(status.isin(["CONCLUÍDO", "CONCLUÍDO COM ATRASO", "COMPLETE", "LATE_COMPLETE", "COMPLETED"]).sum()), int(status.isin(["DISPONÍVEL", "EM ANDAMENTO", "EM ATRASO", "NÃO CONCLUÍDO", "TODO", "MISSED", "PENDING"]).sum()), int((operational_dates > pd.Timestamp.now(tz="UTC")).sum())]})
         summary.to_excel(writer, index=False, sheet_name="Resumo")
         for sheet_name in ("Cronograma", "Dados", "Resumo"):
             sheet = writer.sheets[sheet_name]
@@ -36,4 +37,3 @@ def create_excel(frame: pd.DataFrame) -> bytes:
                 table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
                 sheet.add_table(table)
     return output.getvalue()
-

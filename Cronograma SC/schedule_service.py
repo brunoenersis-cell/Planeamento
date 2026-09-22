@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from dateutil.rrule import rrulestr
 
@@ -33,6 +33,25 @@ def _occurrence_feed_id(schedule_id: object) -> str:
     return f"schedule_{value.removeprefix('scheduleitem_')}" if value.startswith("scheduleitem_") else value
 
 
+STATUS_PRIORITY = {
+    "IN_PROGRESS": 100,
+    "OVERDUE": 90,
+    "MISSED": 80,
+    "TODO": 70,
+    "WONT_DO": 60,
+    "LATE": 50,
+    "LATE_COMPLETE": 50,
+    "COMPLETED": 40,
+    "COMPLETE": 40,
+}
+
+
+def _aggregate_status(statuses: list[object]) -> object:
+    """Calcula o estado operacional de uma ocorrência com vários responsáveis."""
+    valid = [status for status in statuses if status]
+    return max(valid, key=lambda status: STATUS_PRIORITY.get(str(status).upper(), 0), default=None)
+
+
 def _forecast_occurrences(schedules: list[dict[str, Any]], records: list[dict[str, Any]], start_date: str, end_date: str) -> list[dict[str, Any]]:
     """Calcula tarefas futuras ainda não materializadas no feed de ocorrências.
 
@@ -46,7 +65,7 @@ def _forecast_occurrences(schedules: list[dict[str, Any]], records: list[dict[st
     except ValueError:
         return []
     existing = {
-        (str(record.get("schedule_id")), str(record.get("due_time", ""))[:10])
+        (str(record.get("schedule_id")), str(record.get("start_time") or record.get("due_time", ""))[:10])
         for record in records
         if record.get("schedule_id") and record.get("due_time")
     }
@@ -71,6 +90,7 @@ def _forecast_occurrences(schedules: list[dict[str, Any]], records: list[dict[st
             )
             if (schedule_id, due_utc[:10]) in existing:
                 continue
+            is_available = due_time.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc) if due_time.tzinfo is None else due_time.astimezone(timezone.utc) <= datetime.now(timezone.utc)
             forecasts.append({
                 "id": f"planned_{schedule_id}_{due_utc}",
                 "schedule_id": schedule_id,
@@ -78,10 +98,25 @@ def _forecast_occurrences(schedules: list[dict[str, Any]], records: list[dict[st
                 "template_id": schedule.get("template_id"),
                 "start_time": due_utc,
                 "due_time": due_utc,
-                "occurrence_status": "PLANEADA",
+                "occurrence_status": "TODO" if is_available else "PLANEADA",
                 "planned_from_schedule": True,
             })
     return forecasts
+
+
+def _is_in_selected_period(record: dict[str, Any], start: datetime, end: datetime) -> bool:
+    """Inclui ocorrências iniciadas, concluídas ou vencidas dentro do período."""
+    for field in ("start_time", "completed_at", "due_time"):
+        value = record.get(field)
+        if not value:
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if start <= timestamp <= end:
+            return True
+    return False
 
 
 def sync_safetyculture_schedules_with_stats(client: SafetyCultureClient, start_date: str, end_date: str, template_ids: list[str] | None = None) -> SyncResult:
@@ -90,7 +125,18 @@ def sync_safetyculture_schedules_with_stats(client: SafetyCultureClient, start_d
     A API pode devolver a mesma ocorrência várias vezes, uma por responsável.
     Os IDs dos responsáveis são preservados em ``assignee_ids`` para auditoria.
     """
-    records = client.fetch_all_pages(start_date, end_date, template_ids)
+    try:
+        start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+    except ValueError:
+        # Facilita testes/mocks legados; a interface envia sempre ISO 8601.
+        records = client.fetch_all_pages(start_date, end_date, template_ids)
+    else:
+        # O feed filtra apenas por due_time. Alargamos a consulta para capturar
+        # ocorrências iniciadas no período cuja data limite ocorre no mês seguinte.
+        query_end = (end + timedelta(days=62)).isoformat().replace("+00:00", "Z")
+        fetched_records = client.fetch_all_pages(start_date, query_end, template_ids)
+        records = [record for record in fetched_records if _is_in_selected_period(record, start, end)]
     schedules = client.fetch_all_schedules(template_ids)
     forecasts = _forecast_occurrences(schedules, records, start_date, end_date)
     all_records = [*records, *forecasts]
@@ -121,9 +167,18 @@ def sync_safetyculture_schedules_with_stats(client: SafetyCultureClient, start_d
         key = f"{schedule_id}|{occurrence_id}" if schedule_id and occurrence_id else str(record.get("id"))
         assignee_id = record.get("assignee_id") or record.get("user_id")
         if key not in unique:
-            unique[key] = {**record, "assignee_ids": [assignee_id] if assignee_id else []}
-        elif assignee_id and assignee_id not in unique[key]["assignee_ids"]:
-            unique[key]["assignee_ids"].append(assignee_id)
+            unique[key] = {
+                **record,
+                "assignee_ids": [assignee_id] if assignee_id else [],
+                "assignee_statuses": [record.get("occurrence_status")] if record.get("occurrence_status") else [],
+            }
+        else:
+            if assignee_id and assignee_id not in unique[key]["assignee_ids"]:
+                unique[key]["assignee_ids"].append(assignee_id)
+            if record.get("occurrence_status"):
+                unique[key]["assignee_statuses"].append(record["occurrence_status"])
+    for occurrence in unique.values():
+        occurrence["occurrence_status"] = _aggregate_status(occurrence.pop("assignee_statuses", []))
     return SyncResult(occurrences=list(unique.values()), api_rows=len(records), planned_rows=len(forecasts))
 
 
